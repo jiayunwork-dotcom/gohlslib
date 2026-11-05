@@ -78,6 +78,9 @@ type Media struct {
 	// EXT-X-SKIP
 	Skip *MediaSkip
 
+	// EXT-X-DATERANGE
+	DateRanges []*MediaDateRange
+
 	// segments (at least one is required)
 	Segments []*MediaSegment
 
@@ -108,6 +111,7 @@ func (m *Media) Unmarshal(buf []byte) error {
 	var curKey *MediaKey
 
 	curSegment := &MediaSegment{}
+	dateRangesByID := make(map[string]*MediaDateRange)
 
 	for {
 		var line string
@@ -239,6 +243,24 @@ func (m *Media) Unmarshal(buf []byte) error {
 			if err != nil {
 				return err
 			}
+
+		case strings.HasPrefix(line, "#EXT-X-DATERANGE:"):
+			line = line[len("#EXT-X-DATERANGE:"):]
+
+			dr := &MediaDateRange{}
+			err = dr.unmarshal(line)
+			if err != nil {
+				return err
+			}
+
+			if prev, ok := dateRangesByID[dr.ID]; ok {
+				err = dr.validateConsistency(prev)
+				if err != nil {
+					return err
+				}
+			}
+			dateRangesByID[dr.ID] = dr
+			m.DateRanges = append(m.DateRanges, dr)
 
 		case line == "#EXT-X-DISCONTINUITY":
 			curSegment.Discontinuity = true
@@ -410,6 +432,10 @@ func (m Media) Marshal() ([]byte, error) {
 
 	if m.Skip != nil {
 		ret.WriteString(m.Skip.marshal())
+	}
+
+	for _, dr := range m.DateRanges {
+		ret.WriteString(dr.marshal())
 	}
 
 	var prevKey *MediaKey

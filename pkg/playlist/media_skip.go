@@ -3,6 +3,7 @@ package playlist
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/bluenviron/gohlslib/v2/pkg/playlist/primitives"
 )
@@ -12,6 +13,11 @@ type MediaSkip struct {
 	// SKIPPED-SEGMENTS
 	// required
 	SkippedSegments int
+
+	// RECENTLY-REMOVED-DATERANGES
+	// quoted string containing the IDs of the removed Date Ranges,
+	// separated by tab characters.
+	RecentlyRemovedDateRanges []string
 }
 
 func (t *MediaSkip) unmarshal(v string) error {
@@ -24,7 +30,8 @@ func (t *MediaSkip) unmarshal(v string) error {
 	skipSegFound := false
 
 	for key, val := range attrs {
-		if key == "SKIPPED-SEGMENTS" {
+		switch key {
+		case "SKIPPED-SEGMENTS":
 			var tmp uint64
 			tmp, err = strconv.ParseUint(val, 10, 31)
 			if err != nil {
@@ -32,6 +39,11 @@ func (t *MediaSkip) unmarshal(v string) error {
 			}
 			t.SkippedSegments = int(tmp)
 			skipSegFound = true
+
+		case "RECENTLY-REMOVED-DATERANGES":
+			if val != "" {
+				t.RecentlyRemovedDateRanges = strings.Split(val, "\t")
+			}
 		}
 	}
 
@@ -43,5 +55,14 @@ func (t *MediaSkip) unmarshal(v string) error {
 }
 
 func (t MediaSkip) marshal() string {
-	return "#EXT-X-SKIP:SKIPPED-SEGMENTS=" + strconv.FormatInt(int64(t.SkippedSegments), 10) + "\n"
+	ret := "#EXT-X-SKIP:SKIPPED-SEGMENTS=" + strconv.FormatInt(int64(t.SkippedSegments), 10)
+
+	if len(t.RecentlyRemovedDateRanges) != 0 {
+		ret += `,RECENTLY-REMOVED-DATERANGES="` +
+			strings.Join(t.RecentlyRemovedDateRanges, "\t") + `"`
+	}
+
+	ret += "\n"
+
+	return ret
 }

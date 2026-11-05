@@ -129,6 +129,7 @@ type muxerStream struct {
 	closed                 bool
 	targetDuration         int
 	partTargetDuration     time.Duration
+	dateRanges             *[]*playlist.MediaDateRange
 }
 
 func (s *muxerStream) initialize() error {
@@ -422,6 +423,63 @@ func (s *muxerStream) handleMediaPlaylist(w http.ResponseWriter, r *http.Request
 	}
 }
 
+func (s *muxerStream) firstSegmentStartTime(start int) (time.Time, bool) {
+	for i := start; i < len(s.segments); i++ {
+		if t, ok := s.segments[i].getStartNTP(); ok {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
+// selectDateRanges returns the date ranges that must appear in a playlist.
+//
+// Date ranges whose end (END-DATE, or START-DATE plus DURATION) is earlier
+// than the start time of the first concrete (non-gap) segment at
+// firstSegmentIndex are not output. Date ranges without an end are always kept.
+//
+// When removedSinceIndex is greater than firstSegmentIndex (a Playlist Delta
+// Update requested with _HLS_skip=v2), date ranges that would have been
+// output but whose end is earlier than the start of the first non-skipped
+// segment are also removed and their IDs returned as the second value.
+func (s *muxerStream) selectDateRanges(firstSegmentIndex, removedSinceIndex int) (
+	[]*playlist.MediaDateRange,
+	[]string,
+) {
+	if s.dateRanges == nil || len(*s.dateRanges) == 0 {
+		return nil, nil
+	}
+
+	firstStart, hasFirst := s.firstSegmentStartTime(firstSegmentIndex)
+	skipStart, hasSkip := s.firstSegmentStartTime(removedSinceIndex)
+
+	var active []*playlist.MediaDateRange
+	var removed []string
+
+	for _, dr := range *s.dateRanges {
+		var end *time.Time
+		if dr.EndDate != nil {
+			end = dr.EndDate
+		} else if dr.Duration != nil {
+			t := dr.StartDate.Add(*dr.Duration)
+			end = &t
+		}
+
+		if hasFirst && end != nil && end.Before(firstStart) {
+			continue
+		}
+
+		if hasSkip && end != nil && end.Before(skipStart) {
+			removed = append(removed, dr.ID)
+			continue
+		}
+
+		active = append(active, dr)
+	}
+
+	return active, removed
+}
+
 func (s *muxerStream) generateMediaPlaylistMPEGTS(
 	_ bool,
 	rawQuery string,
@@ -432,6 +490,8 @@ func (s *muxerStream) generateMediaPlaylistMPEGTS(
 		TargetDuration: s.targetDuration,
 		MediaSequence:  s.segmentDeleteCount,
 	}
+
+	pl.DateRanges, _ = s.selectDateRanges(0, 0)
 
 	for _, s := range s.segments {
 		if seg, ok := s.(*muxerSegmentMPEGTS); ok {
@@ -456,7 +516,19 @@ func (s *muxerStream) generateMediaPlaylistFMP4(
 	rawQuery string,
 ) ([]byte, error) {
 	skipBoundary := time.Duration(s.targetDuration) * 6 * time.Second
+
+	// _HLS_skip=v2 allows date ranges to be skipped too,
+	// while _HLS_skip=YES only skips segments.
+	skipDateRanges := false
+	if isDeltaUpdate {
+		if q, err := url.ParseQuery(rawQuery); err == nil && q.Get("_HLS_skip") == "v2" {
+			skipDateRanges = true
+		}
+	}
+
 	rawQuery = filterOutHLSParams(rawQuery)
+
+	hasDateRanges := s.dateRanges != nil && len(*s.dateRanges) != 0
 
 	pl := &playlist.Media{
 		Version:        10,
@@ -468,9 +540,10 @@ func (s *muxerStream) generateMediaPlaylistFMP4(
 		partHoldBack := (s.partTargetDuration * 25) / 10
 
 		pl.ServerControl = &playlist.MediaServerControl{
-			CanBlockReload: true,
-			PartHoldBack:   &partHoldBack,
-			CanSkipUntil:   &skipBoundary,
+			CanBlockReload:    true,
+			PartHoldBack:      &partHoldBack,
+			CanSkipUntil:      &skipBoundary,
+			CanSkipDateRanges: hasDateRanges,
 		}
 
 		pl.PartInf = &playlist.MediaPartInf{
@@ -505,6 +578,21 @@ func (s *muxerStream) generateMediaPlaylistFMP4(
 		pl.Skip = &playlist.MediaSkip{
 			SkippedSegments: skipped,
 		}
+	}
+
+	// with _HLS_skip=v2, date ranges that end before the first non-skipped
+	// segment are removed and listed in EXT-X-SKIP.
+	// with _HLS_skip=YES, only segments are skipped.
+	removedSince := 0
+	if skipDateRanges {
+		removedSince = skipped
+	}
+
+	var removedDateRanges []string
+	pl.DateRanges, removedDateRanges = s.selectDateRanges(0, removedSince)
+
+	if skipDateRanges && len(removedDateRanges) != 0 {
+		pl.Skip.RecentlyRemovedDateRanges = removedDateRanges
 	}
 
 	for i, sog := range s.segments {

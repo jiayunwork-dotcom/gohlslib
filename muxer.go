@@ -210,6 +210,8 @@ type Muxer struct {
 	storageFactory storage.Factory
 	segmenter      *muxerSegmenter
 	server         *muxerServer
+	dateRanges     []*playlist.MediaDateRange
+	dateRangesByID map[string]*playlist.MediaDateRange
 	closed         bool
 }
 
@@ -397,6 +399,7 @@ func (m *Muxer) Start() error {
 			tracks:         m.mtracks,
 			id:             "main",
 			nextSegmentID:  nextSegmentID,
+			dateRanges:     &m.dateRanges,
 		}
 		err = stream.initialize()
 		if err != nil {
@@ -455,6 +458,7 @@ func (m *Muxer) Start() error {
 				language:       track.Language,
 				isDefault:      isDefault,
 				nextSegmentID:  nextSegmentID,
+				dateRanges:     &m.dateRanges,
 			}
 			err = stream.initialize()
 			if err != nil {
@@ -578,6 +582,50 @@ func (m *Muxer) WriteKLV(
 		return fmt.Errorf("WriteKLV called with a non-KLV track")
 	}
 	return m.segmenter.writeKLV(m.mtracksByTrack[track], ntp, pts, data)
+}
+
+// WriteDateRange registers or replaces a EXT-X-DATERANGE tag in the media playlists.
+// It can be safely called in parallel with Write*() and Close() methods.
+func (m *Muxer) WriteDateRange(dateRange playlist.MediaDateRange) error {
+	if dateRange.ID == "" {
+		return fmt.Errorf("date range ID is empty")
+	}
+
+	if dateRange.StartDate.IsZero() {
+		return fmt.Errorf("date range START-DATE is missing")
+	}
+
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	if m.dateRangesByID == nil {
+		m.dateRangesByID = make(map[string]*playlist.MediaDateRange)
+	}
+
+	dr := dateRange
+
+	if prev, ok := m.dateRangesByID[dr.ID]; ok {
+		if !dr.StartDate.Equal(prev.StartDate) {
+			return fmt.Errorf("date range %s was already registered with a different START-DATE", dr.ID)
+		}
+
+		if dr.Class != prev.Class {
+			return fmt.Errorf("date range %s was already registered with a different CLASS", dr.ID)
+		}
+
+		for i, other := range m.dateRanges {
+			if other.ID == dr.ID {
+				m.dateRanges[i] = &dr
+				break
+			}
+		}
+	} else {
+		m.dateRanges = append(m.dateRanges, &dr)
+	}
+
+	m.dateRangesByID[dr.ID] = &dr
+
+	return nil
 }
 
 // Handle handles a HTTP request.

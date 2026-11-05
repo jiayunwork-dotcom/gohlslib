@@ -12,6 +12,7 @@ type muxerSegment interface {
 	getPath() string
 	getDuration() time.Duration
 	getSize() uint64
+	getStartNTP() (time.Time, bool)
 	reader() (io.ReadCloser, error)
 }
 
@@ -36,6 +37,10 @@ func (g muxerGap) getDuration() time.Duration {
 
 func (muxerGap) getSize() uint64 {
 	return 0
+}
+
+func (muxerGap) getStartNTP() (time.Time, bool) {
+	return time.Time{}, false
 }
 
 func (muxerGap) reader() (io.ReadCloser, error) {

@@ -61,6 +61,10 @@ func (s *muxerSegmentMPEGTS) getSize() uint64 {
 	return s.storage.Size()
 }
 
+func (s *muxerSegmentMPEGTS) getStartNTP() (time.Time, bool) {
+	return s.startNTP, true
+}
+
 func (s *muxerSegmentMPEGTS) reader() (io.ReadCloser, error) {
 	return s.storage.Reader()
 }

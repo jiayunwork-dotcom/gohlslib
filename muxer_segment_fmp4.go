@@ -50,6 +50,10 @@ func (s *muxerSegmentFMP4) getSize() uint64 {
 	return s.storage.Size()
 }
 
+func (s *muxerSegmentFMP4) getStartNTP() (time.Time, bool) {
+	return s.startNTP, true
+}
+
 func (s *muxerSegmentFMP4) reader() (io.ReadCloser, error) {
 	return s.storage.Reader()
 }

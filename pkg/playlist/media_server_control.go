@@ -27,6 +27,12 @@ type MediaServerControl struct {
 	// Skip Boundary, a decimal-floating-point number of seconds.  The
 	// Skip Boundary MUST be at least six times the Target Duration.
 	CanSkipUntil *time.Duration
+
+	// CAN-SKIP-DATERANGES
+	// Indicates that the Server can produce Playlist Delta Updates that
+	// remove EXT-X-DATERANGE tags, in response to the _HLS_skip=v2
+	// Delivery Directive.
+	CanSkipDateRanges bool
 }
 
 func (t *MediaServerControl) unmarshal(v string) error {
@@ -58,6 +64,9 @@ func (t *MediaServerControl) unmarshal(v string) error {
 			}
 			tmp := time.Duration(d)
 			t.CanSkipUntil = &tmp
+
+		case "CAN-SKIP-DATERANGES":
+			t.CanSkipDateRanges = (val == "YES")
 		}
 	}
 
@@ -77,6 +86,10 @@ func (t MediaServerControl) marshal() string {
 
 	if t.CanSkipUntil != nil {
 		ret += ",CAN-SKIP-UNTIL=" + strconv.FormatFloat(t.CanSkipUntil.Seconds(), 'f', 5, 64)
+	}
+
+	if t.CanSkipDateRanges {
+		ret += ",CAN-SKIP-DATERANGES=YES"
 	}
 
 	ret += "\n"

@@ -84,6 +84,7 @@ type clientStreamDownloader struct {
 	onDownloadSegment        ClientOnDownloadSegmentFunc
 	onDownloadPart           ClientOnDownloadPartFunc
 	onDecodeError            ClientOnDecodeErrorFunc
+	onDateRange              ClientOnDateRangeFunc
 	playlistURL              *url.URL
 	rendition                *playlist.MultivariantRendition
 	firstPlaylist            *playlist.Media
@@ -92,6 +93,8 @@ type clientStreamDownloader struct {
 
 	segmentQueue *clientSegmentQueue
 	curSegmentID *int
+
+	dateRanges map[string]*playlist.MediaDateRange
 
 	// out
 	chTracks         chan []*Track
@@ -115,6 +118,8 @@ func (d *clientStreamDownloader) run(errGroupCtx context.Context) error {
 			return err
 		}
 	}
+
+	d.processDateRanges(d.firstPlaylist)
 
 	d.segmentQueue = &clientSegmentQueue{}
 	d.segmentQueue.initialize()
@@ -197,6 +202,8 @@ func (d *clientStreamDownloader) runLowLatency(errGroupCtx context.Context) erro
 			return err
 		}
 
+		d.processDateRanges(pl)
+
 		if pl.PreloadHint == nil {
 			return fmt.Errorf("preload hint disappeared")
 		}
@@ -226,6 +233,8 @@ func (d *clientStreamDownloader) runTraditional(errGroupCtx context.Context) err
 		if err != nil {
 			return err
 		}
+
+		d.processDateRanges(pl)
 	}
 }
 
@@ -429,4 +438,73 @@ func (d *clientStreamDownloader) onProcessorError(errGroupCtx context.Context, e
 	case d.chProcessorError <- err:
 	case <-errGroupCtx.Done():
 	}
+}
+
+// processDateRanges invokes OnDateRange once for every new date range ID and
+// for every already known ID whose content has changed.
+func (d *clientStreamDownloader) processDateRanges(pl *playlist.Media) {
+	if !d.isLeading || d.onDateRange == nil {
+		return
+	}
+
+	if d.dateRanges == nil {
+		d.dateRanges = make(map[string]*playlist.MediaDateRange)
+	}
+
+	for _, dr := range pl.DateRanges {
+		prev, ok := d.dateRanges[dr.ID]
+		if !ok || !mediaDateRangesEqual(prev, dr) {
+			d.dateRanges[dr.ID] = dr
+			d.onDateRange(dr)
+		}
+	}
+}
+
+func mediaDateRangeStringPtrEqual(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func mediaDateRangesEqual(a, b *playlist.MediaDateRange) bool {
+	if a.ID != b.ID ||
+		a.Class != b.Class ||
+		!a.StartDate.Equal(b.StartDate) ||
+		a.EndOnNext != b.EndOnNext {
+		return false
+	}
+
+	if (a.EndDate == nil) != (b.EndDate == nil) ||
+		(a.EndDate != nil && !a.EndDate.Equal(*b.EndDate)) {
+		return false
+	}
+
+	if (a.Duration == nil) != (b.Duration == nil) ||
+		(a.Duration != nil && *a.Duration != *b.Duration) {
+		return false
+	}
+
+	if (a.PlannedDuration == nil) != (b.PlannedDuration == nil) ||
+		(a.PlannedDuration != nil && *a.PlannedDuration != *b.PlannedDuration) {
+		return false
+	}
+
+	if !mediaDateRangeStringPtrEqual(a.SCTE35Cmd, b.SCTE35Cmd) ||
+		!mediaDateRangeStringPtrEqual(a.SCTE35Out, b.SCTE35Out) ||
+		!mediaDateRangeStringPtrEqual(a.SCTE35In, b.SCTE35In) {
+		return false
+	}
+
+	if len(a.XAttrs) != len(b.XAttrs) {
+		return false
+	}
+
+	for key, val := range a.XAttrs {
+		if b.XAttrs[key] != val {
+			return false
+		}
+	}
+
+	return true
 }

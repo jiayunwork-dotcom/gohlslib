@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"golang.org/x/sync/errgroup"
+
+	"github.com/bluenviron/gohlslib/v2/pkg/playlist"
 )
 
 const (
@@ -73,6 +75,9 @@ type ClientOnDataFLACFunc func(pts int64, frame []byte)
 // ClientOnDataKLVFunc is the prototype of the function passed to OnDataKLV().
 type ClientOnDataKLVFunc func(pts int64, uni []byte)
 
+// ClientOnDateRangeFunc is the prototype of the function passed to OnDateRange().
+type ClientOnDateRangeFunc func(*playlist.MediaDateRange)
+
 func clientAbsoluteURL(base *url.URL, relative string) (*url.URL, error) {
 	u, err := url.Parse(relative)
 	if err != nil {
@@ -117,6 +122,9 @@ type Client struct {
 	OnDownloadPart ClientOnDownloadPartFunc
 	// called when a non-fatal decode error occurs.
 	OnDecodeError ClientOnDecodeErrorFunc
+	// called when a new date range is found in a media playlist,
+	// or when an existing one changes.
+	OnDateRange ClientOnDateRangeFunc
 
 	//
 	// private
@@ -181,6 +189,9 @@ func (c *Client) Start() error {
 		c.OnDecodeError = func(err error) {
 			log.Println(err.Error())
 		}
+	}
+	if c.OnDateRange == nil {
+		c.OnDateRange = func(_ *playlist.MediaDateRange) {}
 	}
 
 	var err error
@@ -309,6 +320,7 @@ func (c *Client) runInner() error {
 		onDownloadSegment:         c.OnDownloadSegment,
 		onDownloadPart:            c.OnDownloadPart,
 		onDecodeError:             c.OnDecodeError,
+		onDateRange:               c.OnDateRange,
 		client:                    c,
 	}
 	c.primaryDownloader.initialize()
